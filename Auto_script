@@ -1,0 +1,385 @@
+// ==UserScript==
+// @name         Auto Answer ULTIMATE - Image Hash Based + Auto Learn (Fixed)
+// @version      6.2
+// @description  🔥 100% Accurate - Image hash matching + Auto Learn (Anti-Crash Version)
+// @match        *://*/*
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
+// @run-at       document-idle
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const JSON_URL = "https://raw.githubusercontent.com/karanthdocs/Auto-Answer-Hindi/refs/heads/main/QAeng.json";
+
+    // Advanced data structures
+    const DB_IMAGES = new Map(); // hash => { choiceId, originalData }
+    let dbLoaded = false;
+    let processedQuestions = new Set();
+    let isProcessing = false; // एंटी-क्रैश लॉक (Prevents Infinite Loops)
+
+    const LEARNED_ANSWERS = new Map(); // hash => choiceId
+
+    // Load learned answers from localStorage
+    try {
+        const saved = localStorage.getItem('LEARNED_ANSWERS');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            Object.keys(parsed).forEach(key => {
+                LEARNED_ANSWERS.set(key, parsed[key]);
+            });
+            console.log(`📚 Loaded ${LEARNED_ANSWERS.size} learned answers`);
+        }
+    } catch(e) {
+        console.log("No learned answers yet");
+    }
+
+    // Save learned answers to localStorage
+    function saveLearnedAnswers() {
+        try {
+            const obj = {};
+            LEARNED_ANSWERS.forEach((value, key) => {
+                obj[key] = value;
+            });
+            localStorage.setItem('LEARNED_ANSWERS', JSON.stringify(obj));
+        } catch(e) {}
+    }
+
+    // CAPTURE MANUAL ANSWERS
+    function captureManualAnswer() {
+        const qImg = getCurrentQuestionImage();
+        if (!qImg || !qImg.src) return;
+
+        const hash = getImageHashFromPage(qImg);
+        if (!hash) return;
+
+        const radios = document.querySelectorAll('input[type="radio"]:checked');
+        if (radios.length === 0) return;
+
+        const selectedRadio = radios[0];
+        let choiceId = null;
+
+        if (selectedRadio.id) {
+            choiceId = selectedRadio.id;
+        } else if (selectedRadio.value) {
+            const num = selectedRadio.value.replace(/\D/g, '');
+            if (num) choiceId = `choice${num}`;
+        } else {
+            const allRadios = document.querySelectorAll('input[type="radio"]');
+            const index = Array.from(allRadios).indexOf(selectedRadio) + 1;
+            if (index) choiceId = `choice${index}`;
+        }
+
+        if (choiceId && hash) {
+            LEARNED_ANSWERS.set(hash, choiceId);
+            saveLearnedAnswers();
+            console.log(`💾 Learned: Hash ${hash} → ${choiceId}`);
+
+            DB_IMAGES.set(hash, {
+                choiceId: choiceId,
+                index: DB_IMAGES.size,
+                originalHtml: "Learned from manual answer",
+                verified: true
+            });
+        }
+    }
+
+    // SIMPLE HASH FUNCTION
+    function simpleHash(str) {
+        let hash = 0;
+        for (let i = 0; i < str.length; i++) {
+            const char = str.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash;
+        }
+        return Math.abs(hash).toString(36);
+    }
+
+    // EXTRACT IMAGE DATA FROM HTML
+    function extractImageDataFromHTML(html) {
+        if (!html) return null;
+        try {
+            let match = html.match(/src=["']data:image\/[^;]+;base64,([^"']+)["']/i);
+            if (match && match[1]) {
+                return { type: 'base64', data: match[1].replace(/[^A-Za-z0-9+/=]/g, '') };
+            }
+            match = html.match(/src=["']([^"']+\.(jpg|jpeg|png|gif))["']/i);
+            if (match && match[1]) {
+                return { type: 'url', data: match[1] };
+            }
+            match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+            if (match && match[1]) {
+                return { type: 'unknown', data: match[1] };
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    // EXTRACT CHOICE FROM HTML
+    function extractChoiceFromHTML(html) {
+        if (!html) return null;
+        try {
+            let match = html.match(/(choice[0-9])/i);
+            if (match) return match[1].toLowerCase();
+
+            match = html.match(/(option[0-9])/i);
+            if (match) return match[1].toLowerCase();
+
+            match = html.match(/\b([1-4])\b/);
+            if (match) return `choice${match[1]}`;
+
+            match = html.match(/id=["']([^"']*[0-9][^"']*)/i);
+            if (match) return match[1];
+
+            match = html.match(/value=["']([0-9])["']/i);
+            if (match) return `choice${match[1]}`;
+        } catch (e) {}
+        return null;
+    }
+
+    // LOAD AND INDEX DATABASE
+    console.log("📦 Loading QA database...");
+
+    fetch(JSON_URL)
+        .then(r => r.json())
+        .then(data => {
+            console.log(`📚 Processing ${data.length} questions...`);
+
+            data.forEach((item, index) => {
+                const imgData = extractImageDataFromHTML(item.q);
+                const choiceId = extractChoiceFromHTML(item.a);
+
+                if (imgData && choiceId) {
+                    const hash = simpleHash(imgData.data);
+                    DB_IMAGES.set(hash, {
+                        choiceId: choiceId,
+                        index: index,
+                        originalHtml: item.q.substring(0, 200),
+                        verified: false
+                    });
+                }
+            });
+
+            LEARNED_ANSWERS.forEach((choiceId, hash) => {
+                if (!DB_IMAGES.has(hash)) {
+                    DB_IMAGES.set(hash, {
+                        choiceId: choiceId,
+                        index: DB_IMAGES.size,
+                        originalHtml: "Learned from manual answer",
+                        verified: true
+                    });
+                }
+            });
+
+            dbLoaded = true;
+            console.log(`✅ Database ready! ${DB_IMAGES.size} unique images indexed.`);
+        })
+        .catch(err => {
+            console.error("❌ Database load failed:", err);
+            if (LEARNED_ANSWERS.size > 0) {
+                LEARNED_ANSWERS.forEach((choiceId, hash) => {
+                    DB_IMAGES.set(hash, {
+                        choiceId: choiceId,
+                        index: DB_IMAGES.size,
+                        originalHtml: "Learned from manual answer",
+                        verified: true
+                    });
+                });
+                dbLoaded = true;
+                console.log(`✅ Using ${LEARNED_ANSWERS.size} learned answers only`);
+            }
+        });
+
+    // GET CURRENT QUESTION IMAGE
+    function getCurrentQuestionImage() {
+        const selectors = [
+            "img[name='qframe']", "img[src*='base64']", "img.question-image",
+            "#questionImage", ".questionImg", "img[alt*='question']", "img[class*='question']"
+        ];
+        for (let selector of selectors) {
+            const img = document.querySelector(selector);
+            if (img && img.src) return img;
+        }
+        return null;
+    }
+
+    // GET IMAGE HASH FROM PAGE
+    function getImageHashFromPage(img) {
+        if (!img || !img.src) return null;
+        try {
+            if (img.src.includes('base64,')) {
+                const base64 = img.src.split('base64,')[1];
+                if (base64) {
+                    return simpleHash(base64.replace(/[^A-Za-z0-9+/=]/g, ''));
+                }
+            }
+            return simpleHash(img.src);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // FIND EXACT OPTION
+    function findExactOption(choiceId) {
+        if (!choiceId) return null;
+        console.log(`🔍 Looking for: "${choiceId}"`);
+
+        let el = document.getElementById(choiceId);
+        if (el) return el;
+
+        el = document.querySelector(`[name="${choiceId}"]`);
+        if (el) return el;
+
+        const num = choiceId.replace(/\D/g, '');
+        el = document.querySelector(`input[value="${num}"]`);
+        if (el) return el;
+
+        const radios = document.querySelectorAll('input[type="radio"]');
+        const index = parseInt(num) - 1;
+        if (radios.length > index) {
+            const radio = radios[index];
+            const parentText = radio.parentElement?.textContent || '';
+            if (parentText.includes(num) || parentText.toLowerCase().includes('option')) {
+                return radio;
+            }
+        }
+
+        const elements = document.querySelectorAll('label, div, span');
+        for (let element of elements) {
+            if (element.textContent && element.textContent.includes(num) &&
+                (element.textContent.toLowerCase().includes('choice') || element.textContent.toLowerCase().includes('option'))) {
+                const radio = element.querySelector('input[type="radio"]');
+                if (radio) return radio;
+            }
+        }
+        return null;
+    }
+
+    // VERIFY OPTION
+    function verifyOption(option, expectedChoiceId) {
+        if (!option || !expectedChoiceId) return false;
+        const expectedNum = expectedChoiceId.replace(/\D/g, '');
+
+        if (option.id && option.id === expectedChoiceId) return true;
+        if (option.name && option.name === expectedChoiceId) return true;
+        if (option.value && option.value === expectedNum) return true;
+
+        if (option.type === 'radio') {
+            const radios = document.querySelectorAll('input[type="radio"]');
+            const currentIndex = Array.from(radios).indexOf(option) + 1;
+            if (currentIndex.toString() === expectedNum) return true;
+        }
+        return false;
+    }
+
+    // MAIN SOLVE FUNCTION
+    async function solveWithHash() {
+        if (!dbLoaded || isProcessing) return;
+
+        const qImg = getCurrentQuestionImage();
+        if (!qImg) return;
+
+        if (!qImg.complete) {
+            await new Promise(r => { qImg.onload = r; setTimeout(r, 1000); });
+        }
+
+        const hash = getImageHashFromPage(qImg);
+        if (!hash || processedQuestions.has(hash)) return;
+
+        const dbEntry = DB_IMAGES.get(hash);
+        if (!dbEntry) return;
+
+        const option = findExactOption(dbEntry.choiceId);
+        if (!option) return;
+
+        if (!verifyOption(option, dbEntry.choiceId)) return;
+
+        try {
+            isProcessing = true; // लॉक एक्टिवेट करें ताकि MutationObserver लूप न बनाए
+
+            // Visual feedback on Parent Element for safety
+            const targetVisual = option.parentElement || option;
+            targetVisual.style.outline = "3px solid #00ff00";
+            targetVisual.style.backgroundColor = "#e0ffe0";
+
+            option.click();
+            option.dispatchEvent(new Event('change', { bubbles: true }));
+
+            if (option.type === 'radio') {
+                option.checked = true;
+            }
+
+            processedQuestions.add(hash);
+            console.log(`✅ CORRECT ANSWER CLICKED: Choice ${dbEntry.choiceId}`);
+
+            setTimeout(() => {
+                targetVisual.style.outline = "";
+                targetVisual.style.backgroundColor = "";
+                isProcessing = false; // अनलॉक करें
+            }, 1500);
+
+        } catch (e) {
+            console.error("Click failed:", e);
+            isProcessing = false;
+        }
+    }
+
+    // OBSERVER WITH SAFETY LOCK
+    let timeoutId = null;
+    const observer = new MutationObserver(() => {
+        if (isProcessing) return; // अगर स्क्रिप्ट खुद बदलाव कर रही है तो इग्नोर करें
+        if (timeoutId) clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+            solveWithHash();
+        }, 300);
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['src']
+    });
+
+    // Initial triggers
+    [1000, 2500].forEach(delay => {
+        setTimeout(() => solveWithHash(), delay);
+    });
+
+    // Backup Periodic Checker
+    setInterval(() => {
+        solveWithHash();
+    }, 4000);
+
+    // CAPTURE EVENTS
+    document.addEventListener('click', function(e) {
+        if (e.target.type === 'radio') {
+            setTimeout(captureManualAnswer, 500);
+        }
+    });
+
+    document.addEventListener('change', function(e) {
+        if (e.target.type === 'radio') {
+            setTimeout(captureManualAnswer, 500);
+        }
+    });
+
+    // Manual Trigger: Ctrl+Shift+H
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.shiftKey && e.key === 'H') {
+            solveWithHash();
+        }
+    });
+
+    // Export Function for Console
+    unsafeWindow.exportLearned = function() {
+        const obj = {};
+        LEARNED_ANSWERS.forEach((value, key) => { obj[key] = value; });
+        return obj;
+    };
+
+    console.log("🚀 ULTIMATE Auto Answer loaded + Anti-Crash Lock active!");
+})();
+
+
