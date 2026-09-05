@@ -1,0 +1,37 @@
+// ==UserScript==
+// @name         Force Show and Enable Button #capphto2
+// @namespace    http://tampermonkey.net/
+// @version      1.1
+// @description  Show and enable the button with ID 'capphto2'
+// @match        https://sarathi.parivahan.gov.in/sarathiservice/authenticationaction.do*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    function unlockButton() {
+        const btn = document.getElementById('capphto2');
+        if (btn) {
+            // Make sure it's visible
+            btn.style.display = 'inline-block'; // or 'block' depending on layout
+            btn.style.visibility = 'visible';
+
+            // Enable the button
+            btn.disabled = false;
+            btn.style.pointerEvents = 'auto';
+            btn.style.opacity = '1';
+
+            // Optional: ensure parent container is visible
+            const container = document.getElementById('NoFaceAuthReq');
+            if (container) {
+                container.style.display = 'block';
+            }
+        }
+    }
+
+    // Run periodically to catch dynamic changes
+    setInterval(unlockButton, 500);
+    // Run once immediately
+    unlockButton();
+})();
