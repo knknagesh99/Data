@@ -2,7 +2,8 @@
 // @name         Auto Answer ULTIMATE - Image Hash Based + Auto Learn (Fixed)
 // @version      6.2
 // @description  🔥 100% Accurate - Image hash matching + Auto Learn (Anti-Crash Version)
-// @match        *://*/*
+// @match        https://sarathi.parivahan.gov.in/sarathiservice/examselectaction.do
+// @match        https://sarathi.parivahan.gov.in/sarathiservice/stallexamaction.do
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-idle
